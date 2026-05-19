@@ -145,6 +145,64 @@ def parse_response(html):
     return "查詢完成，但無法自動解析結果（醫院版面可能已更新）"
 
 
+def parse_birth_date(raw):
+    """將 '074/06/23' 解析為 (year_str, month_str, day_str)"""
+    raw = str(raw).strip()
+    parts = re.split(r'[/\-\.]', raw)
+    if len(parts) != 3:
+        return None
+    y, m, d = [p.strip() for p in parts]
+    return y.zfill(3), m.zfill(2), d.zfill(2)
+
+
+def tmuh_query_one(session, id_no, birth_year, birth_month, birth_day):
+    for attempt in range(1, MAX_RETRY + 1):
+        try:
+            state = get_page_state(session)
+            captcha = get_captcha_text(session)
+        except requests.RequestException as e:
+            if attempt == MAX_RETRY:
+                return f"網路錯誤：{e}"
+            time.sleep(2)
+            continue
+
+        if not captcha:
+            continue
+
+        form_data = {
+            "__EVENTTARGET": "ctl00$MainPlaceHolder$ctl00$btnSubmit",
+            "__EVENTARGUMENT": "",
+            "__LASTFOCUS": "",
+            "__VIEWSTATE": state["__VIEWSTATE"],
+            "__VIEWSTATEGENERATOR": state["__VIEWSTATEGENERATOR"],
+            "ctl00$MainPlaceHolder$ctl00$txtIDNo": id_no,
+            "ctl00$MainPlaceHolder$ctl00$txtPatNo": "",
+            "ctl00$MainPlaceHolder$ctl00$txtPatPwd": "",
+            "ctl00$MainPlaceHolder$ctl00$cbCate": "A",
+            "ctl00$MainPlaceHolder$ctl00$cbYear": birth_year,
+            "ctl00$MainPlaceHolder$ctl00$cbMonth": birth_month,
+            "ctl00$MainPlaceHolder$ctl00$cbDay": birth_day,
+            "vCode": captcha,
+        }
+
+        try:
+            resp = session.post(QUERY_URL, data=form_data, timeout=15, verify=False)
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            if attempt == MAX_RETRY:
+                return f"送出失敗：{e}"
+            time.sleep(2)
+            continue
+
+        result = parse_response(resp.text)
+        if result == "CAPTCHA_ERROR":
+            time.sleep(1)
+            continue
+        return result
+
+    return "超過重試次數，請稍後再試"
+
+
 def query_registration():
     if not CONFIG["id_no"] and not CONFIG["pat_no"]:
         print("[錯誤] 請在 CONFIG 中填入身分證字號或病歷號")

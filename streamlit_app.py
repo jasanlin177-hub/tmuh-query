@@ -11,10 +11,8 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from tmuh_query import get_page_state, get_captcha_text, parse_response
-from batch_query import parse_birth_date, tmuh_query_one, _tmuh_session
+from tmuh_query import parse_birth_date, tmuh_query_one
 from wanfang_query import query_one as wanfang_query_one, HEADERS as WF_HEADERS
-from wanfang_query import BASE_URL as WF_BASE_URL
 
 st.set_page_config(page_title="掛號查詢系統", page_icon="🏥", layout="centered")
 st.title("🏥 掛號查詢系統")

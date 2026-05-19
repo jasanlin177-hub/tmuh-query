@@ -14,21 +14,17 @@ from datetime import datetime
 
 import requests
 import urllib3
-from bs4 import BeautifulSoup
-import ddddocr
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 
 from wanfang_query import query_one as wanfang_query_one
+from tmuh_query import parse_birth_date, tmuh_query_one, parse_response
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ── 北醫附醫設定 ──────────────────────────────────────────
 TMUH_QUERY_URL = "https://www.tmuh.org.tw/service/query"
-TMUH_VCODE_URL = "https://www.tmuh.org.tw/Ctrl/VCode.ashx"
-MAX_RETRY  = 5
-DELAY_MIN  = 1
-DELAY_MAX  = 5
+DELAY_MIN = 1
+DELAY_MAX = 5
 
 
 def _tmuh_session():
@@ -51,83 +47,6 @@ def _wanfang_session():
     return s
 
 
-def get_page_state(session):
-    resp = session.get(TMUH_QUERY_URL, timeout=15, verify=False)
-    resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "lxml")
-    state = {}
-    for field in ["__VIEWSTATE", "__VIEWSTATEGENERATOR", "__EVENTTARGET",
-                  "__EVENTARGUMENT", "__LASTFOCUS"]:
-        tag = soup.find("input", {"name": field})
-        state[field] = tag["value"] if tag else ""
-    return state
-
-
-def get_captcha_text(session):
-    resp = session.get(TMUH_VCODE_URL, timeout=10, verify=False)
-    resp.raise_for_status()
-    ocr = ddddocr.DdddOcr(show_ad=False)
-    return re.sub(r'[^a-zA-Z0-9]', '', ocr.classification(resp.content))
-
-
-from tmuh_query import parse_response
-
-
-def parse_birth_date(raw):
-    raw = str(raw).strip()
-    parts = re.split(r'[/\-\.]', raw)
-    if len(parts) != 3:
-        return None
-    y, m, d = [p.strip() for p in parts]
-    return y.zfill(3), m.zfill(2), d.zfill(2)
-
-
-def tmuh_query_one(session, id_no, birth_year, birth_month, birth_day):
-    for attempt in range(1, MAX_RETRY + 1):
-        try:
-            state = get_page_state(session)
-            captcha = get_captcha_text(session)
-        except requests.RequestException as e:
-            if attempt == MAX_RETRY:
-                return f"網路錯誤：{e}"
-            time.sleep(2)
-            continue
-
-        if not captcha:
-            continue
-
-        form_data = {
-            "__EVENTTARGET": "ctl00$MainPlaceHolder$ctl00$btnSubmit",
-            "__EVENTARGUMENT": "",
-            "__LASTFOCUS": "",
-            "__VIEWSTATE": state["__VIEWSTATE"],
-            "__VIEWSTATEGENERATOR": state["__VIEWSTATEGENERATOR"],
-            "ctl00$MainPlaceHolder$ctl00$txtIDNo": id_no,
-            "ctl00$MainPlaceHolder$ctl00$txtPatNo": "",
-            "ctl00$MainPlaceHolder$ctl00$txtPatPwd": "",
-            "ctl00$MainPlaceHolder$ctl00$cbCate": "A",
-            "ctl00$MainPlaceHolder$ctl00$cbYear": birth_year,
-            "ctl00$MainPlaceHolder$ctl00$cbMonth": birth_month,
-            "ctl00$MainPlaceHolder$ctl00$cbDay": birth_day,
-            "vCode": captcha,
-        }
-
-        try:
-            resp = session.post(TMUH_QUERY_URL, data=form_data, timeout=15, verify=False)
-            resp.raise_for_status()
-        except requests.RequestException as e:
-            if attempt == MAX_RETRY:
-                return f"送出失敗：{e}"
-            time.sleep(2)
-            continue
-
-        result = parse_response(resp.text)
-        if result == "CAPTCHA_ERROR":
-            time.sleep(1)
-            continue
-        return result
-
-    return "超過重試次數，請稍後再試"
 
 
 def run_batch(xlsx_path):
