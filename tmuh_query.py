@@ -55,11 +55,32 @@ def get_captcha_text(session):
     return clean
 
 
+TMUH_FIELDS = ["看診日期", "看診醫師", "時段", "科別", "診間號碼",
+               "看診序號", "預計報到時間", "門診狀態", "取消看診", "診間位置"]
+
+
+def _format_appointment(headers, cells, location=""):
+    """將一筆掛號資料的欄位與值組成結構化字串。"""
+    lines = []
+    for h, v in zip(headers, cells):
+        h = h.strip()
+        v = v.strip()
+        if not h:
+            continue
+        if v and v != h:
+            lines.append(f"{h}：{v}")
+        else:
+            lines.append(h)
+    if location:
+        lines.append(f"診間位置：{location}")
+    return "\n".join(lines)
+
+
 def parse_response(html):
-    """解析回應 HTML，取出掛號資訊"""
+    """解析回應 HTML，取出掛號資訊並格式化為結構化文字。"""
     soup = BeautifulSoup(html, "lxml")
 
-    # 只偵測立即執行的 inline alert（排除函數定義內的預設 alert 字串）
+    # 只偵測立即執行的 inline alert
     scripts = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL | re.IGNORECASE)
     for s in scripts:
         stripped = s.strip().lstrip('//<![CDATA[').rstrip('//]]>').strip()
@@ -70,31 +91,56 @@ def parse_response(html):
                 return "CAPTCHA_ERROR"
             return f"伺服器訊息：{msg}"
 
-    # 嘗試常見結果容器
-    for sel in [
-        "#MainPlaceHolder_ctl00_divResult",
-        "#MainPlaceHolder_ctl00_pnlResult",
-        ".query-result",
-        ".result-table",
-    ]:
-        elem = soup.select_one(sel)
-        if elem and elem.get_text(strip=True):
-            return elem.get_text("\n", strip=True)
+    # 找含掛號欄位的 table，解析為結構化資料
+    for table in soup.find_all("table"):
+        rows = table.find_all("tr")
+        if not rows:
+            continue
 
-    # 找含門診資訊的 table
-    tables = soup.find_all("table")
-    results = []
-    for t in tables:
-        text = t.get_text("\n", strip=True)
-        if any(k in text for k in ["門診", "科別", "醫師", "掛號", "日期", "看診"]):
-            results.append(text)
-    if results:
-        return "\n\n".join(results)
+        # 取得表頭（th 或第一列 td）
+        header_cells = rows[0].find_all(["th", "td"])
+        headers = [c.get_text(strip=True) for c in header_cells]
+
+        if not any(h in headers for h in ["看診日期", "看診醫師", "時段"]):
+            continue
+
+        appointments = []
+        i = 1
+        while i < len(rows):
+            cells = [td.get_text(strip=True) for td in rows[i].find_all("td")]
+            if not cells or all(c == "" for c in cells):
+                i += 1
+                continue
+
+            # 跳過「診間位置」標題列（由下方配對處理）
+            if cells[0] == "診間位置":
+                i += 1
+                continue
+
+            # 資料列：向下找相鄰的「診間位置」子列
+            location = ""
+            if i + 1 < len(rows):
+                next_cells = [td.get_text(strip=True)
+                              for td in rows[i + 1].find_all("td")]
+                if next_cells and next_cells[0] == "診間位置":
+                    location = next_cells[1] if len(next_cells) > 1 else ""
+                    i += 2
+                else:
+                    i += 1
+            else:
+                i += 1
+
+            appointments.append(_format_appointment(headers, cells, location))
+
+        if appointments:
+            return "\n\n".join(appointments)
+        else:
+            return "查無90天內掛號資料"
 
     # 查無資料訊息（頁面文字）
     body_text = soup.get_text()
     if "查無" in body_text or "查不到" in body_text:
-        return "查無90天內的掛號資料"
+        return "查無90天內掛號資料"
 
     return "查詢完成，但無法自動解析結果（醫院版面可能已更新）"
 
