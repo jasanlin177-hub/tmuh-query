@@ -4,38 +4,17 @@ import time
 from datetime import datetime
 
 import pandas as pd
-import requests
 import streamlit as st
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
-from openpyxl.worksheet.datavalidation import DataValidation
 
-from tmuh_query import parse_birth_date, tmuh_query_one
-from wanfang_query import query_one as wanfang_query_one, HEADERS as WF_HEADERS
+from hospitals import REGISTRY
+from hospitals.tmuh import parse_birth_date
 
 st.set_page_config(page_title="掛號查詢系統", page_icon="🏥", layout="centered")
 st.title("🏥 掛號查詢系統")
-st.caption("支援：臺北醫學大學附設醫院・萬芳醫院")
-
-
-def make_tmuh_session():
-    s = requests.Session()
-    s.headers.update({
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        ),
-        "Referer": "https://www.tmuh.org.tw/service/query",
-    })
-    return s
-
-
-def make_wf_session():
-    s = requests.Session()
-    s.headers.update(WF_HEADERS)
-    return s
+st.caption("支援：" + "・".join(h.display_name for h in REGISTRY.values()))
 
 
 def build_result_xlsx(rows):
@@ -45,7 +24,7 @@ def build_result_xlsx(rows):
     ws.title = "查詢結果"
 
     headers    = ["姓名", "醫院", "身分證字號", "出生日期", "查詢結果", "查詢時間"]
-    col_widths = [12, 12, 16, 16, 45, 20]
+    col_widths = [12, 18, 16, 16, 45, 20]
 
     thin   = Side(style="thin", color="AAAAAA")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -87,53 +66,45 @@ def build_result_xlsx(rows):
     return buf.getvalue()
 
 
-# ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_tmuh, tab_wf, tab_batch = st.tabs([
-    "北醫附醫 單筆查詢",
-    "萬芳醫院 單筆查詢",
-    "批次查詢（XLSX）",
-])
+# ── 單筆查詢 Tab ───────────────────────────────────────────────────────────────
+tab_single, tab_batch = st.tabs(["單筆查詢", "批次查詢（XLSX）"])
 
-# ── 北醫附醫 單筆查詢 ──────────────────────────────────────────────────────────
-with tab_tmuh:
-    st.subheader("臺北醫學大學附設醫院")
+with tab_single:
+    st.subheader("單筆查詢")
+    hosp_name = st.selectbox("醫院", list(REGISTRY.keys()), key="single_hosp")
+    hosp      = REGISTRY[hosp_name]
+
     c1, c2 = st.columns(2)
     with c1:
-        tmuh_id = st.text_input("身分證字號", placeholder="A123456789", key="tmuh_id").strip().upper()
+        single_id = st.text_input("身分證字號", placeholder="A123456789",
+                                   key="single_id").strip().upper()
     with c2:
-        tmuh_birth = st.text_input("出生日期（民國年/月/日）", placeholder="074/06/23", key="tmuh_birth").strip()
-
-    if st.button("查詢", key="btn_tmuh"):
-        if not tmuh_id or not tmuh_birth:
-            st.warning("請填入身分證字號與出生日期")
+        if hosp.needs_birth:
+            single_birth = st.text_input("出生日期（民國年/月/日）",
+                                          placeholder="074/06/23",
+                                          key="single_birth").strip()
         else:
-            parsed = parse_birth_date(tmuh_birth)
-            if not parsed:
-                st.error("出生日期格式錯誤，請輸入如 074/06/23")
-            else:
-                y, m, d = parsed
-                with st.spinner("查詢中，請稍候..."):
-                    result = tmuh_query_one(make_tmuh_session(), tmuh_id, y, m, d)
-                if any(k in result for k in ["查不到", "查無"]):
-                    st.info(result)
-                elif any(k in result for k in ["錯誤", "失敗", "超過"]):
-                    st.error(result)
-                else:
-                    st.success("查詢完成")
-                    st.text(result)
+            st.caption(f"{hosp_name} 僅需身分證字號")
+            single_birth = ""
 
-# ── 萬芳醫院 單筆查詢 ──────────────────────────────────────────────────────────
-with tab_wf:
-    st.subheader("萬芳醫院")
-    wf_id = st.text_input("身分證字號", placeholder="A123456789", key="wf_id").strip().upper()
-    st.caption("萬芳醫院僅需身分證字號，不需出生日期")
-
-    if st.button("查詢", key="btn_wf"):
-        if not wf_id:
+    if st.button("查詢", key="btn_single"):
+        if not single_id:
             st.warning("請填入身分證字號")
+        elif hosp.needs_birth and not single_birth:
+            st.warning("請填入出生日期")
         else:
+            birth_args = {}
+            if hosp.needs_birth:
+                parsed = parse_birth_date(single_birth)
+                if not parsed:
+                    st.error("出生日期格式錯誤，請輸入如 074/06/23")
+                    st.stop()
+                birth_args = dict(birth_year=parsed[0],
+                                  birth_month=parsed[1],
+                                  birth_day=parsed[2])
             with st.spinner("查詢中，請稍候..."):
-                result = wanfang_query_one(make_wf_session(), id_no=wf_id)
+                session = hosp.make_session()
+                result  = hosp.query_one(session, single_id, **birth_args)
             if any(k in result for k in ["查不到", "查無"]):
                 st.info(result)
             elif any(k in result for k in ["錯誤", "失敗", "超過"]):
@@ -145,14 +116,15 @@ with tab_wf:
 # ── 批次查詢 ───────────────────────────────────────────────────────────────────
 with tab_batch:
     st.subheader("批次查詢")
+    hosp_list = "、".join(REGISTRY.keys())
     st.caption(
-        "XLSX 欄位順序：**姓名**（可空）、**醫院**（北醫附醫／萬芳醫院）、"
-        "**身分證字號**、**出生日期**（北醫附醫必填，萬芳可空白）"
+        f"XLSX 欄位順序：**姓名**（可空）、**醫院**（{hosp_list}）、"
+        "**身分證字號**、**出生日期**（需出生日期的醫院必填，其餘可空白）"
     )
 
-    uploaded    = st.file_uploader("上傳查詢名單 XLSX", type=["xlsx"])
-    query_all   = st.checkbox("查詢所有醫院（忽略醫院欄位，同時查詢北醫附醫與萬芳醫院）",
-                              value=True)
+    uploaded  = st.file_uploader("上傳查詢名單 XLSX", type=["xlsx"])
+    query_all = st.checkbox("查詢所有醫院（忽略醫院欄位，同時查詢全部醫院）",
+                            value=True)
 
     if uploaded:
         df = pd.read_excel(uploaded, dtype=str).fillna("")
@@ -160,67 +132,70 @@ with tab_batch:
         st.dataframe(df, use_container_width=True)
 
         if st.button("開始批次查詢", key="btn_batch"):
-            tmuh_sess = make_tmuh_session()
-            wf_sess   = make_wf_session()
-            rows      = []
-            total     = len(df)
-            progress  = st.progress(0, text="準備中...")
-            status    = st.empty()
+            sessions = {name: h.make_session() for name, h in REGISTRY.items()}
+            rows     = []
+            total    = len(df)
+            progress = st.progress(0, text="準備中...")
+            status   = st.empty()
 
             for i, row in df.iterrows():
                 vals    = list(row.values)
                 name    = str(vals[0]).strip() if len(vals) > 0 else ""
                 hospital= str(vals[1]).strip() if len(vals) > 1 else ""
-                id_no_b = str(vals[2]).strip() if len(vals) > 2 else ""
+                id_no   = str(vals[2]).strip() if len(vals) > 2 else ""
                 birth_b = str(vals[3]).strip() if len(vals) > 3 else ""
 
-                progress.progress(i / total, text=f"查詢 {i+1}/{total}：{id_no_b}")
+                progress.progress(i / total, text=f"查詢 {i+1}/{total}：{id_no}")
 
-                if not id_no_b:
+                if not id_no:
                     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    rows.append((name, hospital, id_no_b, birth_b, "身分證字號為空，略過", ts))
+                    rows.append((name, hospital, id_no, birth_b, "身分證字號為空，略過", ts))
                     continue
 
                 if query_all:
                     parts = []
-                    # 北醫附醫
-                    status.text(f"[北醫附醫] {name} {id_no_b}")
-                    if not birth_b:
-                        parts.append("【北醫附醫】需填出生日期，略過")
-                    else:
-                        parsed = parse_birth_date(birth_b)
-                        if not parsed:
-                            parts.append("【北醫附醫】出生日期格式錯誤")
+                    for hname, hosp in REGISTRY.items():
+                        status.text(f"[{hname}] {name} {id_no}")
+                        if hosp.needs_birth:
+                            if not birth_b:
+                                parts.append(f"【{hname}】需填出生日期，略過")
+                                continue
+                            parsed = parse_birth_date(birth_b)
+                            if not parsed:
+                                parts.append(f"【{hname}】出生日期格式錯誤")
+                                continue
+                            r = hosp.query_one(sessions[hname], id_no,
+                                               birth_year=parsed[0],
+                                               birth_month=parsed[1],
+                                               birth_day=parsed[2])
                         else:
-                            y, m, d = parsed
-                            r = tmuh_query_one(tmuh_sess, id_no_b, y, m, d)
-                            parts.append(f"【北醫附醫】{r}")
-                    time.sleep(random.uniform(1, 5))
-                    # 萬芳醫院
-                    status.text(f"[萬芳醫院] {name} {id_no_b}")
-                    r = wanfang_query_one(wf_sess, id_no=id_no_b)
-                    parts.append(f"【萬芳醫院】{r}")
+                            r = hosp.query_one(sessions[hname], id_no)
+                        parts.append(f"【{hname}】{r}")
+                        if hosp is not list(REGISTRY.values())[-1]:
+                            time.sleep(random.uniform(1, 3))
                     result   = "\n".join(parts)
                     hosp_tag = "全部"
                 else:
                     hosp_tag = hospital if hospital else "北醫附醫"
-                    is_wf    = "萬芳" in hosp_tag
-                    status.text(f"[{hosp_tag}] {name} {id_no_b}")
-                    if is_wf:
-                        result = wanfang_query_one(wf_sess, id_no=id_no_b)
-                    else:
+                    hosp     = REGISTRY.get(hosp_tag, REGISTRY["北醫附醫"])
+                    status.text(f"[{hosp_tag}] {name} {id_no}")
+                    if hosp.needs_birth:
                         if not birth_b:
-                            result = "北醫附醫需填出生日期"
+                            result = f"{hosp_tag}需填出生日期"
                         else:
                             parsed = parse_birth_date(birth_b)
                             if not parsed:
                                 result = "出生日期格式錯誤"
                             else:
-                                y, m, d = parsed
-                                result = tmuh_query_one(tmuh_sess, id_no_b, y, m, d)
+                                result = hosp.query_one(sessions[hosp_tag], id_no,
+                                                        birth_year=parsed[0],
+                                                        birth_month=parsed[1],
+                                                        birth_day=parsed[2])
+                    else:
+                        result = hosp.query_one(sessions[hosp_tag], id_no)
 
                 ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                rows.append((name, hosp_tag, id_no_b, birth_b, result, ts))
+                rows.append((name, hosp_tag, id_no, birth_b, result, ts))
 
                 if i < total - 1:
                     time.sleep(random.uniform(1, 5))
