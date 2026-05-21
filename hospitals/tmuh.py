@@ -3,12 +3,12 @@
 import re
 import time
 
-import ddddocr
 import requests
 import urllib3
 from bs4 import BeautifulSoup
 
 from .base import HospitalBase
+from . import ocr as _ocr_mod
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -42,8 +42,7 @@ def _get_page_state(session):
 def _get_captcha(session):
     resp = session.get(_VCODE_URL, timeout=10, verify=False)
     resp.raise_for_status()
-    ocr = ddddocr.DdddOcr(show_ad=False)
-    result = ocr.classification(resp.content)
+    result = _ocr_mod.classify(resp.content)
     clean = re.sub(r'[^a-zA-Z0-9]', '', result)
     print(f"  [OCR-北醫] {clean!r}")
     return clean

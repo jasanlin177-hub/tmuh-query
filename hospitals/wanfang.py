@@ -3,12 +3,12 @@
 import re
 import time
 
-import ddddocr
 import requests
 import urllib3
 from bs4 import BeautifulSoup
 
 from .base import HospitalBase
+from . import ocr as _ocr_mod
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -27,7 +27,7 @@ _MAX_RETRY = 5
 
 
 def _get_page_state(session):
-    resp = session.get(_BASE_URL, timeout=15, verify=False)
+    resp = session.get(_BASE_URL, timeout=25, verify=False)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "lxml")
     fields = ["__EVENTTARGET", "__EVENTARGUMENT", "__LASTFOCUS",
@@ -43,8 +43,7 @@ def _get_page_state(session):
 def _get_captcha(session):
     resp = session.get(_CAPTCHA_URL, timeout=10, verify=False)
     resp.raise_for_status()
-    ocr = ddddocr.DdddOcr(show_ad=False)
-    result = ocr.classification(resp.content)
+    result = _ocr_mod.classify(resp.content)
     clean = re.sub(r"\D", "", result)
     print(f"  [OCR-萬芳] {clean!r}")
     return clean
@@ -66,14 +65,24 @@ def _parse_response(html):
     if "驗證碼錯誤" in body or "請重新輸入驗證碼" in body:
         return "CAPTCHA_ERROR"
 
-    tables = soup.find_all("table")
-    results = []
-    for t in tables:
-        text = t.get_text("\n", strip=True)
-        if any(k in text for k in ["門診", "科別", "醫師", "掛號", "日期", "看診", "取消"]):
-            results.append(text)
-    if results:
-        return "\n\n".join(results)
+    for table in soup.find_all("table"):
+        rows = table.find_all("tr")
+        if not rows:
+            continue
+        headers = [c.get_text(strip=True) for c in rows[0].find_all(["th", "td"])]
+        if not any(h in headers for h in ["就診日期", "看診日期", "門診日期", "科別", "就診科別", "醫師", "就診醫師"]):
+            continue
+        appointments = []
+        for row in rows[1:]:
+            cells = [td.get_text(strip=True) for td in row.find_all("td")]
+            if not cells or all(c == "" for c in cells):
+                continue
+            lines = [f"{h}：{v}" for h, v in zip(headers, cells) if h and v]
+            if lines:
+                appointments.append("\n".join(lines))
+        if appointments:
+            return "\n\n".join(appointments)
+        return "查無90天內掛號資料"
 
     if "查無資料" in body or "查不到" in body or "無掛號" in body:
         return "查無90天內掛號資料"
@@ -114,7 +123,7 @@ class Wanfang(HospitalBase):
                 "ctl00$ContentPlaceHolder1$ButtonC":   "查詢",
             }
             try:
-                resp = session.post(_BASE_URL, data=payload, timeout=15, verify=False)
+                resp = session.post(_BASE_URL, data=payload, timeout=25, verify=False)
                 resp.raise_for_status()
             except requests.RequestException as e:
                 if attempt == _MAX_RETRY:
