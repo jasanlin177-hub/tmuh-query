@@ -29,7 +29,7 @@ ws.row_dimensions[1].height = 30
 # 醫院欄下拉選單
 dv = DataValidation(
     type="list",
-    formula1='"北醫附醫,萬芳醫院,臺北市立聯合醫院"',
+    formula1='"北醫附醫,萬芳醫院,臺北市立聯合醫院,馬偕醫院（台北）,馬偕醫院（淡水）,振興醫院,長庚醫院（台北）,臺大附醫"',
     allow_blank=False,
     showDropDown=False,
 )
